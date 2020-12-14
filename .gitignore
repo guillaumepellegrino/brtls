@@ -1,0 +1,8 @@
+*.o
+*.d
+*.so
+*.pem
+*.key
+*.csr
+*.crt
+build*
