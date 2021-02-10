@@ -71,18 +71,14 @@ static void tls_cleanup() {
 }
 
 /**
- * Poll socket and sigfd
+ * Poll socket
  */
-static int pollsocket(int socket, int sigfd, int sockevents) {
-    struct pollfd pollfds[2] = {
+static int pollsocket(int socket, int sockevents) {
+    struct pollfd pollfds[1] = {
         {
             .fd = socket,
             .events = sockevents,
         },
-        {
-            .fd = sigfd,
-            .events = POLLIN,
-        }
     };
 
     do {
@@ -95,12 +91,6 @@ static int pollsocket(int socket, int sigfd, int sockevents) {
             errno = EIO;
             return -1;
         }
-        if (pollfds[1].revents & POLLIN) {
-            log("\nPolling interrupted: signal received");
-            errno = EINTR;
-            return -1;
-        }
-
     } while (!(pollfds[0].revents & sockevents));
 
     return 0;
@@ -271,7 +261,7 @@ error:
 /**
  * The TLS listen socket accept the first TLS client connecting.
  */
-int tls_accept_first_client(tls_t *tls, int sigfd) {
+int tls_accept_first_client(tls_t *tls) {
     if (!tls || !tls->ctx) {
         log("NULL argument");
         goto error;
@@ -286,7 +276,7 @@ int tls_accept_first_client(tls_t *tls, int sigfd) {
         tls->socket = -1;
     }
 
-    if (pollsocket(tls->server, sigfd, POLLIN) != 0) {
+    if (pollsocket(tls->server, POLLIN) != 0) {
         goto error;
     }
 
@@ -307,12 +297,12 @@ int tls_accept_first_client(tls_t *tls, int sigfd) {
     while ((rt = SSL_accept(tls->ssl)) < 0) {
         switch (SSL_get_error(tls->ssl, rt)) {
             case SSL_ERROR_WANT_READ:
-                if (pollsocket(tls->socket, sigfd, POLLIN) != 0) {
+                if (pollsocket(tls->socket, POLLIN) != 0) {
                     goto error;
                 }
                 break;
             case SSL_ERROR_WANT_WRITE:
-                if (pollsocket(tls->socket, sigfd, POLLOUT) != 0) {
+                if (pollsocket(tls->socket, POLLOUT) != 0) {
                     goto error;
                 }
                 break;
@@ -333,7 +323,7 @@ error:
  * Create a TLS socket according configuration and connect to server.
  * The socket use two-way TLS authentication.
  */
-int tls_connect(tls_t *tls, const tls_cfg_t *cfg, int sigfd) {
+int tls_connect(tls_t *tls, const tls_cfg_t *cfg) {
     struct addrinfo hints = {
         .ai_family = AF_UNSPEC,
         .ai_socktype = SOCK_STREAM,
@@ -405,7 +395,7 @@ int tls_connect(tls_t *tls, const tls_cfg_t *cfg, int sigfd) {
             continue;
         }
 
-        if (pollsocket(tls->socket, sigfd, POLLOUT) != 0) {
+        if (pollsocket(tls->socket, POLLOUT) != 0) {
             close(tls->socket), tls->socket = -1;
             if (errno != EINTR) {
                 continue;
@@ -427,12 +417,12 @@ int tls_connect(tls_t *tls, const tls_cfg_t *cfg, int sigfd) {
     while ((rt = SSL_connect(tls->ssl)) < 0) {
         switch (SSL_get_error(tls->ssl, rt)) {
             case SSL_ERROR_WANT_READ:
-                if (pollsocket(tls->socket, sigfd, POLLIN) != 0) {
+                if (pollsocket(tls->socket, POLLIN) != 0) {
                     goto error;
                 }
                 break;
             case SSL_ERROR_WANT_WRITE:
-                if (pollsocket(tls->socket, sigfd, POLLOUT) != 0) {
+                if (pollsocket(tls->socket, POLLOUT) != 0) {
                     goto error;
                 }
                 break;

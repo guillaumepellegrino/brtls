@@ -38,8 +38,8 @@ struct _tls_cfg {
 tls_t *tls_create();
 void tls_destroy(tls_t *tls);
 int tls_listen(tls_t *tls, const tls_cfg_t *cfg);
-int tls_accept_first_client(tls_t *tls, int sigfd);
-int tls_connect(tls_t *tls, const tls_cfg_t *cfg, int sigfd);
+int tls_accept_first_client(tls_t *tls);
+int tls_connect(tls_t *tls, const tls_cfg_t *cfg);
 int tls_socket(tls_t *tls);
 ssize_t tls_read(tls_t *tls, void *buf, size_t count);
 ssize_t tls_write(tls_t *tls, void *buf, size_t count);

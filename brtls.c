@@ -25,7 +25,6 @@
 #include <unistd.h>
 #include <getopt.h>
 #include <errno.h>
-#include <signal.h>
 #include <fcntl.h>
 #include <arpa/inet.h>
 #include <net/if.h>
@@ -33,8 +32,7 @@
 #include <netinet/ether.h>
 #include <netinet/ether.h>
 #include <linux/if_packet.h>
-#include <sys/epoll.h>
-#include <sys/signalfd.h>
+#include <poll.h>
 #include <sys/ioctl.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -42,6 +40,16 @@
 #include <netdb.h>
 #include "brtls.h"
 #include "tls.h"
+
+typedef struct _brtls_ctx brtls_ctx_t;
+struct _brtls_ctx {
+    const char *ifname;
+    int rawfd;
+    tls_t *tls;
+    tls_cfg_t tls_cfg;
+    bool server;
+    int vlanid; /** VLAN ID set on packets sent over TLS */
+};
 
 /**
  * global buffer, used for reading and writting
@@ -59,11 +67,6 @@ static union __attribute__((packed)) {
         uint8_t data[];
     } ethvlanpkt;
 } g_packet;
-
-/**
- * VLAN ID set on packets sent over TLS
- */
-static int g_vlanid = -1;
 
 static bool runcmd(const char *argv[]) {
     int pid = fork();
@@ -198,7 +201,7 @@ ssize_t forward_tls2intf(tls_t *tls, int rawfd) {
 /**
  * Read a packet from Raw socket and forward it to TLS socket
  */
-ssize_t forward_intf2tls(int rawfd, tls_t *tls) {
+ssize_t forward_intf2tls(int rawfd, tls_t *tls, int vlanid) {
     static char controldata[1000];
     struct iovec vec;
     ssize_t rdsize = 0, wrsize = 0;
@@ -235,8 +238,8 @@ ssize_t forward_intf2tls(int rawfd, tls_t *tls) {
     }
 
     /** force vlanid if specified */
-    if (g_vlanid != -1) {
-        vlantci = g_vlanid;
+    if (vlanid != -1) {
+        vlantci = vlanid;
     }
 
     /* insert vlan header */
@@ -259,6 +262,98 @@ ssize_t forward_intf2tls(int rawfd, tls_t *tls) {
 }
 
 /**
+ * Verify if daemon is alive
+ */
+static bool daemon_is_running(const char *pidfile) {
+    bool running = false;
+    int pid = 0;
+    FILE *fp = fopen(pidfile, "r");
+
+    if (fp) {
+        fscanf(fp, "%d", &pid);
+        if (pid) {
+            running = (kill(pid, 0) == 0);
+        }
+        fclose(fp);
+    }
+
+    return running;
+}
+
+/**
+ * Write daemon pid to pidfile
+ */
+static bool daemon_write_pidfile(const char *pidfile) {
+    FILE *fp = fopen(pidfile, "w");
+    if (!fp) {
+        return false;
+    }
+    fprintf(fp, "%d\n", getpid());
+    fclose(fp);
+    return true;
+}
+
+/**
+ * Event loop:
+ * 1. Forward packets from interface to tls socket
+ * 2. Forward packets from tls socket to interface
+ */
+static int brtls_eventloop(brtls_ctx_t *ctx) {
+    int rt = 1;
+    struct pollfd pollfds[2] = {
+        {
+            .fd = ctx->rawfd,
+            .events = POLLIN,
+        },
+        {
+            .fd = tls_socket(ctx->tls),
+            .events = POLLIN,
+        },
+    };
+
+    debug("TLS Bridge: Entering event loop");
+
+    while (poll(pollfds, sizeof(pollfds)/sizeof(*pollfds), -1) > 0) {
+        if (pollfds[0].revents & POLLIN) {
+            ssize_t size = forward_intf2tls(ctx->rawfd, ctx->tls, ctx->vlanid);
+            if (size < 0) {
+                if (errno != EAGAIN) {
+                    log("forward_intf2tls failed: %m");
+                }
+            }
+            else if (size == 0) {
+                log("socket closed");
+                break;
+            }
+        }
+        if (pollfds[0].revents & (POLLERR|POLLHUP|POLLNVAL)) {
+            log("raw socket returned an error: Exit program");
+            rt = 0;
+            break;
+        }
+        if (pollfds[1].revents & POLLIN) {
+            ssize_t size = forward_tls2intf(ctx->tls, ctx->rawfd);
+            if (size < 0) {
+                if (errno != EAGAIN) {
+                    log("forward_tls2intf failed: %m");
+                }
+            }
+            else if (size == 0) {
+                log("socket closed");
+                break;
+            }
+        }
+        if (pollfds[1].revents & (POLLERR|POLLHUP|POLLNVAL)) {
+            log("tls socket returned an error");
+            break;
+        }
+    }
+
+    debug("TLS Bridge: Exiting event loop");
+    return rt;
+}
+
+/**
  * Display help
  */
 static void help() {
@@ -266,12 +361,14 @@ static void help() {
     debug("Bridge two interfaces over TLS.");
     debug("");
     debug("Options:");
-    debug("  -i, --ifname=NAME              interface name (mandatory argument)");
-    debug("  -c, --cert=FILE                public certificate");
-    debug("  -k, --key=FILE                 private key");
-    debug("  -v, --vlanid=[-1, 255]         Set VLANID on packets sent over TLS.");
-    debug("                                 vlandid=-1 left the vlan header unchanged (default).");
-    debug("                                 vlanid=0 remove the vlan header.");
+    debug("  -i, --ifname=NAME              Interface name (mandatory argument)");
+    debug("  -c, --cert=FILE                Public certificate");
+    debug("  -k, --key=FILE                 Private key");
+    debug("  -v, --vlanid=[-1, 255]         Set VLANID on packets sent over TLS");
+    debug("                                 vlandid=-1 left the vlan header unchanged (default)");
+    debug("                                 vlanid=0 remove the vlan header");
+    debug("  -p, --pid=FILE                 Write the daemon pid in this file (default: /var/run/brtls.pid)");
+    debug("  -d, --daemon                   Daemonize the program after startup");
     debug("  -s, --server                   Run in server mode");
     debug("  -h, --help                     Display this help");
     debug("  -V, --version                  Display the version");
@@ -286,27 +383,28 @@ static void version() {
 }
 
 int main(int argc, char *argv[]) {
-    const char *ifname = NULL;
-    int epoll = -1;
-    int sigfd = -1;
-    int rawfd = -1;
-    int tlsfd = -1;
+    brtls_ctx_t _ctx = {
+        .ifname = NULL,
+        .rawfd = -1,
+        .tls = NULL,
+        .tls_cfg = {0},
+        .server = false,
+        .vlanid = -1,
+    };
+    brtls_ctx_t *ctx = &_ctx;
     int opt = -1;
     int rt = 1;
-    sigset_t sigmask = {0};
-    tls_t *tls = NULL;
-    tls_cfg_t tls_cfg = {0};
-    bool server = false;
     bool daemonize = false;
-    struct epoll_event epoll_event = {0};
-    const char *short_options = "i:c:k:v:sdhV";
+    const char *pidfile = "/var/run/brtls.pid";
+    const char *short_options = "i:c:k:v:p:dshV";
     const struct option long_options[] = {
         {"ifname",      required_argument,  0, 'i'},
         {"cert",        required_argument,  0, 'c'},
         {"key",         required_argument,  0, 'k'},
         {"vlanid",      required_argument,  0, 'v'},
-        {"server",      no_argument,        0, 's'},
+        {"pid-file",    required_argument,  0, 'p'},
         {"daemon",      no_argument,        0, 'd'},
+        {"server",      no_argument,        0, 's'},
         {"help",        no_argument,        0, 'h'},
         {"version",     no_argument,        0, 'V'},
         {0}
@@ -315,22 +413,25 @@ int main(int argc, char *argv[]) {
     while ((opt = getopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
         switch (opt) {
             case 'i':
-                ifname = optarg;
+                ctx->ifname = optarg;
                 break;
             case 'c':
-                tls_cfg.certificate = optarg;
+                ctx->tls_cfg.certificate = optarg;
                 break;
             case 'k':
-                tls_cfg.privatekey = optarg;
+                ctx->tls_cfg.privatekey = optarg;
                 break;
             case 'v':
-                g_vlanid = atoi(optarg);
+                ctx->vlanid = atoi(optarg);
                 break;
-            case 's':
-                server = true;
+            case 'p':
+                pidfile = optarg;
                 break;
             case 'd':
                 daemonize = true;
+                break;
+            case 's':
+                ctx->server = true;
                 break;
             case 'h':
                 help();
@@ -344,89 +445,54 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    tls_cfg.address = argc > optind+0 ? argv[optind+0] : "0.0.0.0";
-    tls_cfg.port    = argc > optind+1 ? argv[optind+1] : "9000";
+    ctx->tls_cfg.address = argc > optind+0 ? argv[optind+0] : "0.0.0.0";
+    ctx->tls_cfg.port    = argc > optind+1 ? argv[optind+1] : "9000";
 
-    if ((epoll = epoll_create1(EPOLL_CLOEXEC)) < 0) {
-        log("Failed to create epoll: %m");
+    if (!ctx->ifname) {
+        log("ifname argument was not provided");
         goto exit;
     }
 
-    if (ifname && !ethtool_disable_tcp_reassembly(ifname)) {
+    if (geteuid() != 0) {
+        log("Please start the program with root permissions");
+        goto exit;
+    }
+
+    if (daemonize && daemon_is_running(pidfile)) {
+        log("daemon is already running");
+        goto exit;
+    }
+
+    if (!ethtool_disable_tcp_reassembly(ctx->ifname)) {
         log("ethtool errors are ignored");
     }
 
-    sigaddset(&sigmask, SIGINT);
-    sigaddset(&sigmask, SIGTERM);
-    sigaddset(&sigmask, SIGQUIT);
-    if (sigprocmask(SIG_BLOCK, &sigmask, NULL) != 0) {
-        log("Failed to block sigmask: %m");
+    if ((ctx->rawfd = raw_open_socket(ctx->ifname)) < 0) {
+        log("Failed to open raw socket on interface %s", ctx->ifname);
         goto exit;
     }
 
-    if ((sigfd = signalfd(-1, &sigmask, SFD_NONBLOCK|SFD_CLOEXEC)) < 0) {
-        log("Failed to signal fd: %m");
-        goto exit;
-    }
-
-    if (ifname && (rawfd = raw_open_socket(ifname)) < 0) {
-        log("Failed to open raw socket on interface %s", ifname);
-        goto exit;
-    }
-
-    if (!(tls = tls_create())) {
+    if (!(ctx->tls = tls_create())) {
         log("Failed to create tls socket");
         goto exit;
     }
 
-    if (server) {
-        if (tls_listen(tls, &tls_cfg) != 0) {
+    if (ctx->server) {
+        if (tls_listen(ctx->tls, &ctx->tls_cfg) != 0) {
             log("Failed to listen on tls socket");
-            goto exit;
-        }
-
-        log("Waiting for client to connect");
-        if (tls_accept_first_client(tls, sigfd) != 0) {
-            log("Failed to accept on tls client");
             goto exit;
         }
     }
     else {
-        if (tls_connect(tls, &tls_cfg, sigfd) != 0) {
+        log("Connecting");
+        if (tls_connect(ctx->tls, &ctx->tls_cfg) != 0) {
             log("Failed to connect");
             goto exit;
         }
+        log("Connected");
     }
 
-    if (rawfd == -1) {
-        log("TLS client connected");
-        goto exit;
-    }
-
-    tlsfd = tls_socket(tls);
-
-    epoll_event.events = EPOLLIN;
-    epoll_event.data.fd = rawfd;
-    if (epoll_ctl(epoll, EPOLL_CTL_ADD, rawfd, &epoll_event) != 0) {
-        log("Failed to add raw %s socket to epoll: %m", ifname);
-        goto exit;
-    }
-
-    epoll_event.events = EPOLLIN;
-    epoll_event.data.fd = tlsfd;
-    if (epoll_ctl(epoll, EPOLL_CTL_ADD, tlsfd, &epoll_event) != 0) {
-        log("Failed to add raw %s socket to epoll: %m", ifname);
-        goto exit;
-    }
-
-    epoll_event.events = EPOLLIN;
-    epoll_event.data.fd = sigfd;
-    if (epoll_ctl(epoll, EPOLL_CTL_ADD, sigfd, &epoll_event) != 0) {
-        log("Failed to add raw %s socket to epoll: %m", ifname);
-        goto exit;
-    }
-
-    debug("TLS Bridge initialized");
+    debug("TLS Bridge: Initialized");
 
     if (daemonize) {
         debug("Daemonize");
@@ -434,54 +500,60 @@ int main(int argc, char *argv[]) {
             log("Failed to daemonize: %m");
             goto exit;
         }
+        daemon_write_pidfile(pidfile);
     }
 
-    while (epoll_wait(epoll, &epoll_event, 1, -1) > 0) {
-        if (epoll_event.data.fd == rawfd) {
-            ssize_t size = forward_intf2tls(rawfd, tls);
-            if (size < 0) {
-                if (errno != EAGAIN) {
-                    log("forward_intf2tls failed: %m");
+
+    if (ctx->server) {
+        while (true) {
+            log("Waiting for client to connect");
+            while (tls_accept_first_client(ctx->tls) != 0) {
+                if (errno == EINTR) {
+                    goto exit;
                 }
+                log("Failed to accept tls client");
+                sleep(1);
+                continue;
             }
-            else if (size == 0) {
-                log("socket closed");
+            log("Client connected");
+
+            if (brtls_eventloop(ctx) == 0) {
                 break;
             }
         }
-        else if (epoll_event.data.fd == tlsfd) {
-            ssize_t size = forward_tls2intf(tls, rawfd);
-            if (size < 0) {
-                if (errno != EAGAIN) {
-                    log("forward_tls2intf failed: %m");
-                }
-            }
-            else if (size == 0) {
-                log("socket closed");
+    }
+    else {
+        while (true) {
+            int retry = 1;
+            if (brtls_eventloop(ctx) == 0) {
                 break;
             }
-        }
-        else if (epoll_event.data.fd == sigfd) {
-            debug("\nSignal received: Exit program");
-            rt = 0;
-            break;
+
+            log("Retrying to connect to server");
+            while (tls_connect(ctx->tls, &ctx->tls_cfg) != 0) {
+                if (errno == EINTR) {
+                    goto exit;
+                }
+                log("Failed to connect to server: Retry in %d seconds.", retry);
+                sleep(retry);
+                retry *= 2;
+                if (retry > 60) {
+                    retry = 60;
+                }
+                log("Retrying to connect to server");
+            }
+            log("Connected to server");
         }
     }
-
-    debug("TLS Bridge cleanup");
 
 exit:
-    if (rawfd >= 0) {
-        close(rawfd);
+    debug("TLS Bridge cleanup");
+
+    if (ctx->rawfd >= 0) {
+        close(ctx->rawfd);
     }
-    if (tls) {
-        tls_destroy(tls);
-    }
-    if (sigfd >= 0) {
-        close(sigfd);
-    }
-    if (epoll >= 0) {
-        close(epoll);
+    if (ctx->tls) {
+        tls_destroy(ctx->tls);
     }
 
     return rt;
