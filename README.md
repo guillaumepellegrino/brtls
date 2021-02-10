@@ -11,12 +11,14 @@ Usage: brtls [OPTION] ipaddress port
 Bridge two network interfaces over TLS.
 
 Options:
-  -i, --ifname=NAME              interface name (mandatory argument)
-  -c, --cert=FILE                public certificate (default: cert.pem)
-  -k, --key=FILE                 private key (default: key.pem)
-  -v, --vlanid=[-1, 255]         Set VLANID on packets sent over TLS (default: -1).
+  -i, --ifname=NAME              Interface name (mandatory argument)
+  -c, --cert=FILE                Public certificate (default: cert.pem)
+  -k, --key=FILE                 Private key (default: key.pem)
+  -v, --vlanid=[-1, 255]         Set VLANID on packets sent over TLS (default: -1)
                                  vlandid=-1 left the vlan header unchanged
-                                 vlanid=0 remove the vlan header.
+                                 vlanid=0 remove the vlan header
+  -p, --pid=FILE                 Write the daemon pid in this file (default: /var/run/brtls.pid)
+  -d, --daemon                   Daemonize the program after startup
   -s, --server                   Run in server mode
   -h, --help                     Display this help
   -V, --version                  Display the version

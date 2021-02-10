@@ -358,14 +358,14 @@ static int brtls_eventloop(brtls_ctx_t *ctx) {
  */
 static void help() {
     debug("Usage: brtls [OPTION] ipaddress port");
-    debug("Bridge two interfaces over TLS.");
+    debug("Bridge two network interfaces over TLS.");
     debug("");
     debug("Options:");
     debug("  -i, --ifname=NAME              Interface name (mandatory argument)");
-    debug("  -c, --cert=FILE                Public certificate");
-    debug("  -k, --key=FILE                 Private key");
-    debug("  -v, --vlanid=[-1, 255]         Set VLANID on packets sent over TLS");
-    debug("                                 vlandid=-1 left the vlan header unchanged (default)");
+    debug("  -c, --cert=FILE                Public certificate (default: cert.pem)");
+    debug("  -k, --key=FILE                 Private key (default: key.pem)");
+    debug("  -v, --vlanid=[-1, 255]         Set VLANID on packets sent over TLS (default: -1)");
+    debug("                                 vlandid=-1 left the vlan header unchanged");
     debug("                                 vlanid=0 remove the vlan header");
     debug("  -p, --pid=FILE                 Write the daemon pid in this file (default: /var/run/brtls.pid)");
     debug("  -d, --daemon                   Daemonize the program after startup");
