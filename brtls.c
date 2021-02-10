@@ -65,6 +65,58 @@ static union __attribute__((packed)) {
  */
 static int g_vlanid = -1;
 
+static bool runcmd(const char *argv[]) {
+    int pid = fork();
+
+    if (pid == 0) {
+        execvp(argv[0], (char **) argv);
+        log("Failed to run command %s: %m", argv[0]);
+        exit(1);
+    }
+    else if (pid > 0) {
+        waitpid(pid, NULL, 0);
+        return true;
+    }
+    else {
+        log("Failed to fork(): %m");
+        return false;
+    }
+}
+
+/**
+ * Run ethtool command
+ */
+static bool ethtool_set(const char *ifname, const char *option, const char *value) {
+    const char *argv[] = {"ethtool", "-K", ifname, option, value, NULL};
+
+    if (!runcmd(argv)) {
+        log("ethtool -K %s %s %s -> failed", ifname, option, value);
+        log("Did you install ethtool ?");
+    }
+
+    return true;
+}
+
+/**
+ * Disable HW TCP Reassembly using ethtool
+ *
+ * ethtool -K eno1 tso off
+ * ethtool -K eno1 ufo off
+ * ethtool -K eno1 gso off
+ * ethtool -K eno1 gro off
+ *
+ */
+static bool ethtool_disable_tcp_reassembly(const char *ifname) {
+    bool ret = true;
+
+    ret &= ethtool_set(ifname, "tso", "off");
+    ret &= ethtool_set(ifname, "ufo", "off");
+    ret &= ethtool_set(ifname, "gso", "off");
+    ret &= ethtool_set(ifname, "gro", "off");
+
+    return ret;
+}
+
 /**
  * Open a raw socket and bind it to ifname
  */
@@ -298,6 +350,10 @@ int main(int argc, char *argv[]) {
     if ((epoll = epoll_create1(EPOLL_CLOEXEC)) < 0) {
         log("Failed to create epoll: %m");
         goto exit;
+    }
+
+    if (ifname && !ethtool_disable_tcp_reassembly(ifname)) {
+        log("ethtool errors are ignored");
     }
 
     sigaddset(&sigmask, SIGINT);
