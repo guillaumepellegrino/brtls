@@ -356,29 +356,29 @@ static int brtls_eventloop(brtls_ctx_t *ctx) {
  * Display help
  */
 static void help() {
-    debug("Usage: brtls [OPTION] ipaddress port");
-    debug("Bridge two network interfaces over TLS.");
-    debug("");
-    debug("Options:");
-    debug("  -i, --ifname=NAME              Interface name (mandatory argument)");
-    debug("  -c, --cert=FILE                Public certificate (default: cert.pem)");
-    debug("  -k, --key=FILE                 Private key (default: key.pem)");
-    debug("  -v, --vlanid=[-1, 255]         Set VLANID on packets sent over TLS (default: -1)");
-    debug("                                 vlandid=-1 left the vlan header unchanged");
-    debug("                                 vlanid=0 remove the vlan header");
-    debug("  -p, --pid=FILE                 Write the daemon pid in this file (default: /var/run/brtls.pid)");
-    debug("  -d, --daemon                   Daemonize the program after startup");
-    debug("  -s, --server                   Run in server mode");
-    debug("  -h, --help                     Display this help");
-    debug("  -V, --version                  Display the version");
-    debug("");
+    console("Usage: brtls [OPTION] ipaddress port");
+    console("Bridge two network interfaces over TLS.");
+    console("");
+    console("Options:");
+    console("  -i, --ifname=NAME              Interface name (mandatory argument)");
+    console("  -c, --cert=FILE                Public certificate (default: cert.pem)");
+    console("  -k, --key=FILE                 Private key (default: key.pem)");
+    console("  -v, --vlanid=[-1, 255]         Set VLANID on packets sent over TLS (default: -1)");
+    console("                                 vlandid=-1 left the vlan header unchanged");
+    console("                                 vlanid=0 remove the vlan header");
+    console("  -p, --pid=FILE                 Write the daemon pid in this file (default: /var/run/brtls.pid)");
+    console("  -d, --daemon                   Daemonize the program after startup");
+    console("  -s, --server                   Run in server mode");
+    console("  -h, --help                     Display this help");
+    console("  -V, --version                  Display the version");
+    console("");
 }
 
 /**
  * Display version
  */
 static void version() {
-    debug("brtls 1.0");
+    console("brtls 1.0");
 }
 
 int main(int argc, char *argv[]) {
@@ -408,6 +408,8 @@ int main(int argc, char *argv[]) {
         {"version",     no_argument,        0, 'V'},
         {0}
     };
+
+    openlog(NULL, LOG_CONS|LOG_PID|LOG_NDELAY|LOG_PERROR, LOG_LOCAL1);
 
     while ((opt = getopt_long(argc, argv, short_options, long_options, NULL)) != -1) {
         switch (opt) {
@@ -554,6 +556,7 @@ exit:
     if (ctx->tls) {
         tls_destroy(ctx->tls);
     }
+    closelog();
 
     return rt;
 }

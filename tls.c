@@ -45,6 +45,18 @@ struct _tls {
 static int tls_socket_refcount = 0;
 
 /**
+ * Log ssl error to syslog
+ */
+static int log_ssl_error(const char *str, size_t len, void *u) {
+    (void) len;
+    (void) u;
+
+    syslog(LOG_INFO, "%s", str);
+
+    return 0;
+}
+
+/**
  * Initialize openssl
  */
 static void tls_initialize() {
@@ -114,13 +126,13 @@ tls_t *tls_create() {
 
     if (!(method = SSLv23_method())) {
         log("Unknow SSL method");
-        ERR_print_errors_fp(stderr);
+        ERR_print_errors_cb(log_ssl_error, NULL);
         goto error;
     }
 
     if (!(tls->ctx = SSL_CTX_new(method))) {
         log("Failed to create SSL context");
-        ERR_print_errors_fp(stderr);
+        ERR_print_errors_cb(log_ssl_error, NULL);
         goto error;
     }
 
@@ -228,13 +240,13 @@ int tls_listen(tls_t *tls, const tls_cfg_t *cfg) {
 
     if (SSL_CTX_use_certificate_file(tls->ctx, cert, SSL_FILETYPE_PEM) != 1) {
         log("Failed to open certificate");
-        ERR_print_errors_fp(stderr);
+        ERR_print_errors_cb(log_ssl_error, NULL);
         goto error;
     }
 
     if (SSL_CTX_use_PrivateKey_file(tls->ctx, key, SSL_FILETYPE_PEM) != 1 ) {
         log("Failed to open private key");
-        ERR_print_errors_fp(stderr);
+        ERR_print_errors_cb(log_ssl_error, NULL);
         goto error;
     }
 
@@ -287,7 +299,7 @@ int tls_accept_first_client(tls_t *tls) {
 
     if (!(tls->ssl = SSL_new(tls->ctx))) {
         log("Failed to create SSL socket");
-        ERR_print_errors_fp(stderr);
+        ERR_print_errors_cb(log_ssl_error, NULL);
         goto error;
     }
 
@@ -308,7 +320,7 @@ int tls_accept_first_client(tls_t *tls) {
                 break;
             default:
                 log("SSL accept failed");
-                ERR_print_errors_fp(stderr);
+                ERR_print_errors_cb(log_ssl_error, NULL);
                 goto error;
         }
     }
@@ -352,25 +364,25 @@ int tls_connect(tls_t *tls, const tls_cfg_t *cfg) {
 
     if (SSL_CTX_load_verify_locations(tls->ctx, cert, NULL) != 1) {
         log("Could not set the CA file location");
-        ERR_print_errors_fp(stderr);
+        ERR_print_errors_cb(log_ssl_error, NULL);
         goto error;
     }
 
     if (SSL_CTX_use_certificate_file(tls->ctx, cert, SSL_FILETYPE_PEM) != 1) {
         log("Failed to open certificate");
-        ERR_print_errors_fp(stderr);
+        ERR_print_errors_cb(log_ssl_error, NULL);
         goto error;
     }
 
     if (SSL_CTX_use_PrivateKey_file(tls->ctx, key, SSL_FILETYPE_PEM) != 1 ) {
         log("Failed to open private key");
-        ERR_print_errors_fp(stderr);
+        ERR_print_errors_cb(log_ssl_error, NULL);
         goto error;
     }
 
     if (SSL_CTX_check_private_key(tls->ctx) != 1) {
         log("Server's certificate and key don't match");
-        ERR_print_errors_fp(stderr);
+        ERR_print_errors_cb(log_ssl_error, NULL);
         goto error;
     }
 
@@ -408,7 +420,7 @@ int tls_connect(tls_t *tls, const tls_cfg_t *cfg) {
 
     if (!(tls->ssl = SSL_new(tls->ctx))) {
         log("Failed to create SSL socket");
-        ERR_print_errors_fp(stderr);
+        ERR_print_errors_cb(log_ssl_error, NULL);
         goto error;
     }
 
@@ -428,7 +440,7 @@ int tls_connect(tls_t *tls, const tls_cfg_t *cfg) {
                 break;
             default:
                 log("SSL connection failed");
-                ERR_print_errors_fp(stderr);
+                ERR_print_errors_cb(log_ssl_error, NULL);
                 goto error;
         }
     }
