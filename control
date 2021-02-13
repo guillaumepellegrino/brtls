@@ -1,0 +1,9 @@
+Source: brtls
+Section: net
+Priority: optional
+Maintainer: Guillaume Pellegrino <guillaume.pellegrino@yahoo.com>
+Version: 1.0.0
+Homepage: https://github.com/guillaumepellegrino/brtls
+Package: brtls
+Architecture: all
+Description: Bridge two network interfaces over TLS.

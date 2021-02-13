@@ -19,7 +19,7 @@ $(BUILD):
 	mkdir -p $(BUILD)
 
 install:
-	$(INSTALL) -m 4755 $(TARGET) /usr/bin/
+	$(INSTALL) -m 0755 $(TARGET) /usr/bin/
 
 clean:
 	rm -rf $(BUILD)
@@ -34,6 +34,13 @@ cert:
 	# Self sign the CSR
 	openssl x509 -req -days 365 -in brtls.csr -signkey key.pem -out cert.pem
 
+dpkg: all
+	mkdir -p $(BUILD)/dpkg/DEBIAN
+	mkdir -p $(BUILD)/dpkg/usr/bin
+	$(INSTALL) -m 0644 control $(BUILD)/dpkg/DEBIAN
+	$(INSTALL) -m 0755 $(TARGET) $(BUILD)/dpkg/usr/bin
+	dpkg -b $(BUILD)/dpkg $(BUILD)/brtls.deb
 
-.PHONY: all install clean cert
+
+.PHONY: all install clean cert dpkg
 
