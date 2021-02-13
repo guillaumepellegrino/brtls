@@ -27,6 +27,7 @@
 #include <poll.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -42,6 +43,21 @@ struct _tls {
     int socket;
 };
 
+static const char *default_certs[] = {
+    "/etc/brtls-cert.pem",
+    "/etc/brtls/cert.pem",
+    "brtls-cert.pem",
+    "cert.pem",
+    NULL,
+};
+static const char *default_keys[] = {
+    "/etc/brtls-key.pem",
+    "/etc/brtls/key.pem",
+    "brtls-key.pem",
+    "key.pem",
+    NULL,
+};
+
 static int tls_socket_refcount = 0;
 
 /**
@@ -54,6 +70,24 @@ static int log_ssl_error(const char *str, size_t len, void *u) {
     syslog(LOG_INFO, "%s", str);
 
     return 0;
+}
+
+/**
+ * Return the first existing file from NULL terminated list
+ */
+const char *openfile(const char *files[]) {
+    struct stat st = {0};
+
+    int i;
+    for (i = 0; files[i]; i++) {
+        if (stat(files[i], &st) == 0) {
+            log("%s found", files[i]);
+            return files[i];
+        }
+        log("%s: %m", files[i]);
+    }
+
+    return NULL;
 }
 
 /**
@@ -228,6 +262,18 @@ int tls_listen(tls_t *tls, const tls_cfg_t *cfg) {
         goto error;
     }
 
+    if (!(cert = cfg->certificate)) {
+        if (!(cert = openfile(default_certs))) {
+            log("Certificate file not found");
+            goto error;
+        }
+    }
+    if (!(key = cfg->privatekey)) {
+        if (!(key = openfile(default_keys))) {
+            log("Private key file not found");
+            goto error;
+        }
+    }
     cert = (cfg->certificate?cfg->certificate:"cert.pem");
     key = (cfg->privatekey?cfg->privatekey:"key.pem");
 
@@ -359,8 +405,18 @@ int tls_connect(tls_t *tls, const tls_cfg_t *cfg) {
         tls->socket = -1;
     }
 
-    cert = (cfg->certificate?cfg->certificate:"cert.pem");
-    key = (cfg->privatekey?cfg->privatekey:"key.pem");
+    if (!(cert = cfg->certificate)) {
+        if (!(cert = openfile(default_certs))) {
+            log("Certificate file not found");
+            goto error;
+        }
+    }
+    if (!(key = cfg->privatekey)) {
+        if (!(key = openfile(default_keys))) {
+            log("Private key file not found");
+            goto error;
+        }
+    }
 
     if (SSL_CTX_load_verify_locations(tls->ctx, cert, NULL) != 1) {
         log("Could not set the CA file location");
