@@ -270,8 +270,7 @@ static bool daemon_is_running(const char *pidfile) {
     FILE *fp = fopen(pidfile, "r");
 
     if (fp) {
-        fscanf(fp, "%d", &pid);
-        if (pid) {
+        if (pid && fscanf(fp, "%d", &pid) == 1) {
             running = (kill(pid, 0) == 0);
         }
         fclose(fp);
