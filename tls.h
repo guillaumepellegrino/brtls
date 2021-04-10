@@ -35,6 +35,8 @@ struct _tls_cfg {
     union sockaddr_u sockaddr;
 };
 
+extern bool tls_accept_expired_cert;
+
 tls_t *tls_create();
 void tls_destroy(tls_t *tls);
 int tls_listen(tls_t *tls, const tls_cfg_t *cfg);

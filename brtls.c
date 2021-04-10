@@ -369,6 +369,8 @@ static void help() {
     console("  -p, --pid=FILE                 Write the daemon pid in this file (default: /var/run/brtls.pid)");
     console("  -d, --daemon                   Daemonize the program after startup");
     console("  -s, --server                   Run in server mode");
+    console("  -e, --expired                  Accept expired certificate");
+    console("  -t, --test                     Verify TLS connection only");
     console("  -h, --help                     Display this help");
     console("  -V, --version                  Display the version");
     console("");
@@ -394,8 +396,9 @@ int main(int argc, char *argv[]) {
     int opt = -1;
     int rt = 1;
     bool daemonize = false;
+    bool test = false;
     const char *pidfile = "/var/run/brtls.pid";
-    const char *short_options = "i:c:k:v:p:dshV";
+    const char *short_options = "i:c:k:v:p:dsthV";
     const struct option long_options[] = {
         {"ifname",      required_argument,  0, 'i'},
         {"cert",        required_argument,  0, 'c'},
@@ -404,6 +407,8 @@ int main(int argc, char *argv[]) {
         {"pid-file",    required_argument,  0, 'p'},
         {"daemon",      no_argument,        0, 'd'},
         {"server",      no_argument,        0, 's'},
+        {"expired",     no_argument,        0, 'e'},
+        {"test",        no_argument,        0, 't'},
         {"help",        no_argument,        0, 'h'},
         {"version",     no_argument,        0, 'V'},
         {0}
@@ -434,6 +439,12 @@ int main(int argc, char *argv[]) {
             case 's':
                 ctx->server = true;
                 break;
+            case 'e':
+                tls_accept_expired_cert = true;
+                break;
+            case 't':
+                test = true;
+                break;
             case 'h':
                 help();
                 return 0;
@@ -449,7 +460,7 @@ int main(int argc, char *argv[]) {
     ctx->tls_cfg.address = argc > optind+0 ? argv[optind+0] : "0.0.0.0";
     ctx->tls_cfg.port    = argc > optind+1 ? argv[optind+1] : "9000";
 
-    if (!ctx->ifname) {
+    if (!test && !ctx->ifname) {
         log("ifname argument was not provided");
         goto exit;
     }
@@ -464,11 +475,14 @@ int main(int argc, char *argv[]) {
         goto exit;
     }
 
-    if (!ethtool_disable_tcp_reassembly(ctx->ifname)) {
+    if (!test && !ethtool_disable_tcp_reassembly(ctx->ifname)) {
         log("ethtool errors are ignored");
     }
 
-    if ((ctx->rawfd = raw_open_socket(ctx->ifname)) < 0) {
+    if (test) {
+        ctx->rawfd = 0;
+    }
+    else if ((ctx->rawfd = raw_open_socket(ctx->ifname)) < 0) {
         log("Failed to open raw socket on interface %s", ctx->ifname);
         goto exit;
     }

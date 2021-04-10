@@ -36,6 +36,14 @@
 #include "brtls.h"
 #include "tls.h"
 
+#if OPENSSL_VERSION_NUMBER < 0x10100000L
+#define TLS_method SSLv23_method
+#endif
+
+#ifndef CIPHER_LIST
+#define CIPHER_LIST "EDH+CAMELLIA:EDH+aRSA:EECDH+aRSA+AESGCM:EECDH+aRSA+SHA384:EECDH+aRSA+SHA256:EECDH:AES256-GCM-SHA384:AES256-SHA256:AES256-SHA:AES128-SHA:+CAMELLIA256:+AES256:+CAMELLIA128:+AES128:+kRSA:+SSLv3:!aNULL:!eNULL:!LOW:!3DES:!MD5:!EXP:!PSK:!RC4:!SEED:-DSS:DHE-DSS-AES256-GCM-SHA384"
+#endif
+
 struct _tls {
     SSL_CTX *ctx;
     SSL *ssl;
@@ -57,6 +65,8 @@ static const char *default_keys[] = {
     "key.pem",
     NULL,
 };
+
+bool tls_accept_expired_cert = false;
 
 static int tls_socket_refcount = 0;
 
@@ -90,6 +100,40 @@ const char *openfile(const char *files[]) {
     return NULL;
 }
 
+
+static int tls_verify_cert_callback(int ok, X509_STORE_CTX *store) {
+    char data[256];
+    int err = X509_STORE_CTX_get_error(store);
+    X509 *cert = X509_STORE_CTX_get_current_cert(store);
+
+    if (ok) {
+        log("Certificate is ok");
+        return ok;
+    }
+
+    switch (err) {
+        case X509_V_ERR_CERT_NOT_YET_VALID:
+        case X509_V_ERR_CERT_HAS_EXPIRED:
+            if (tls_accept_expired_cert) {
+                log("Acepting expired certificate");
+                return 1;
+            }
+            break;
+        default:
+            break;
+    }
+
+    log("Failed to verify certificate");
+    log("   Depth: %d", X509_STORE_CTX_get_error_depth(store));
+    X509_NAME_oneline(X509_get_issuer_name(cert), data, sizeof(data));
+    log("   Issuer: %s",data);
+    X509_NAME_oneline(X509_get_subject_name(cert), data, sizeof(data));
+    log("   Subject: %s", data);
+    log("   Error %d: %s", err, X509_verify_cert_error_string(err));
+
+    return ok;
+}
+
 /**
  * Initialize openssl
  */
@@ -98,7 +142,6 @@ static void tls_initialize() {
         ERR_load_BIO_strings();
         ERR_load_CRYPTO_strings();
         SSL_load_error_strings();
-        OpenSSL_add_ssl_algorithms();
         SSL_library_init();
     }
 
@@ -158,7 +201,7 @@ tls_t *tls_create() {
     tls->server = -1;
     tls->socket = -1;
 
-    if (!(method = SSLv23_method())) {
+    if (!(method = TLS_method())) {
         log("Unknow SSL method");
         ERR_print_errors_cb(log_ssl_error, NULL);
         goto error;
@@ -166,6 +209,12 @@ tls_t *tls_create() {
 
     if (!(tls->ctx = SSL_CTX_new(method))) {
         log("Failed to create SSL context");
+        ERR_print_errors_cb(log_ssl_error, NULL);
+        goto error;
+    }
+
+    if (SSL_CTX_set_cipher_list(tls->ctx, CIPHER_LIST) != 1) {
+        log("Failed to set cipher list");
         ERR_print_errors_cb(log_ssl_error, NULL);
         goto error;
     }
@@ -274,11 +323,10 @@ int tls_listen(tls_t *tls, const tls_cfg_t *cfg) {
             goto error;
         }
     }
-    cert = (cfg->certificate?cfg->certificate:"cert.pem");
-    key = (cfg->privatekey?cfg->privatekey:"key.pem");
 
     if (SSL_CTX_load_verify_locations(tls->ctx, cert, NULL) != 1) {
         log("Could not set the CA file location");
+        ERR_print_errors_cb(log_ssl_error, NULL);
         goto error;
     }
 
@@ -302,7 +350,7 @@ int tls_listen(tls_t *tls, const tls_cfg_t *cfg) {
     }
 
     SSL_CTX_set_mode(tls->ctx, SSL_MODE_AUTO_RETRY);
-    SSL_CTX_set_verify(tls->ctx, SSL_VERIFY_PEER|SSL_VERIFY_FAIL_IF_NO_PEER_CERT, NULL);
+    SSL_CTX_set_verify(tls->ctx, SSL_VERIFY_PEER|SSL_VERIFY_FAIL_IF_NO_PEER_CERT, tls_verify_cert_callback);
     SSL_CTX_set_verify_depth(tls->ctx, 1);
 
     if ((tls->server = tcp_listen_socket(cfg)) < 0) {
@@ -332,10 +380,6 @@ int tls_accept_first_client(tls_t *tls) {
     if (tls->socket >= 0) {
         close(tls->socket);
         tls->socket = -1;
-    }
-
-    if (pollsocket(tls->server, POLLIN) != 0) {
-        goto error;
     }
 
     if ((tls->socket = accept(tls->server, NULL, NULL)) < 0) {
@@ -443,7 +487,7 @@ int tls_connect(tls_t *tls, const tls_cfg_t *cfg) {
     }
 
     SSL_CTX_set_mode(tls->ctx, SSL_MODE_AUTO_RETRY);
-    SSL_CTX_set_verify(tls->ctx, SSL_VERIFY_PEER|SSL_VERIFY_FAIL_IF_NO_PEER_CERT, NULL);
+    SSL_CTX_set_verify(tls->ctx, SSL_VERIFY_PEER|SSL_VERIFY_FAIL_IF_NO_PEER_CERT, tls_verify_cert_callback);
     SSL_CTX_set_verify_depth(tls->ctx, 1);
 
     if ((rt = getaddrinfo(cfg->address, cfg->port, &hints, &ai_list)) != 0) {
