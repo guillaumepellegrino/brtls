@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -69,6 +70,26 @@ static const char *default_keys[] = {
 bool tls_accept_expired_cert = false;
 
 static int tls_socket_refcount = 0;
+
+int setnonblocking(int fd, int nonblocking) {
+    int flags, newflags;
+
+    flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0) {
+        perror("fcntl(F_GETFL)");
+        return -1;
+    }
+    if (nonblocking)
+        newflags = flags | (int) O_NONBLOCK;
+    else
+        newflags = flags & ~((int) O_NONBLOCK);
+    if (newflags != flags)
+        if (fcntl(fd, F_SETFL, newflags) < 0) {
+            perror("fcntl(F_SETFL)");
+            return -1;
+        }
+    return 0;
+}
 
 /**
  * Log ssl error to syslog
@@ -507,6 +528,8 @@ int tls_connect(tls_t *tls, const tls_cfg_t *cfg) {
             continue;
         }
 
+        setnonblocking(tls->socket, 1);
+
         if (pollsocket(tls->socket, POLLOUT) != 0) {
             close(tls->socket), tls->socket = -1;
             if (errno != EINTR) {
@@ -529,11 +552,15 @@ int tls_connect(tls_t *tls, const tls_cfg_t *cfg) {
     while ((rt = SSL_connect(tls->ssl)) < 0) {
         switch (SSL_get_error(tls->ssl, rt)) {
             case SSL_ERROR_WANT_READ:
+                log("SSL_ERROR_WANT_READ");
+                exit(1);
                 if (pollsocket(tls->socket, POLLIN) != 0) {
                     goto error;
                 }
                 break;
             case SSL_ERROR_WANT_WRITE:
+                log("SSL_ERROR_WANT_WRITE");
+                exit(1);
                 if (pollsocket(tls->socket, POLLOUT) != 0) {
                     goto error;
                 }
